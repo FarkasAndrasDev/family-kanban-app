@@ -1,47 +1,87 @@
 package com.farkasandrasdev.familykanbanapp
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.safeContentPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import org.jetbrains.compose.resources.painterResource
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.farkasandrasdev.familykanbanapp.ui.LoginScreen
+import com.farkasandrasdev.familykanbanapp.ui.ProfileMenuIcon
+import com.farkasandrasdev.familykanbanapp.ui.ProfileScreen
 
-import familykanbanapp.composeapp.generated.resources.Res
-import familykanbanapp.composeapp.generated.resources.compose_multiplatform
+private object Routes {
+    const val BOARD = "board"
+    const val PROFILE = "profile"
+}
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-@Preview
-fun App() {
+fun App(authViewModel: AuthViewModel = viewModel { AuthViewModel() }) {
+    val authState by authViewModel.state.collectAsState()
+
     MaterialTheme {
-        var showContent by remember { mutableStateOf(false) }
-        Column(
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.primaryContainer)
-                .safeContentPadding()
-                .fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Button(onClick = { showContent = !showContent }) {
-                Text("Click me!")
+        when (val state = authState) {
+            is AuthState.Loading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
             }
-            AnimatedVisibility(showContent) {
-                val greeting = remember { Greeting().greet() }
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Image(painterResource(Res.drawable.compose_multiplatform), null)
-                    Text("Compose: $greeting")
+
+            is AuthState.Unauthenticated, is AuthState.Error -> {
+                LoginScreen(
+                    isLoading = state is AuthState.Loading,
+                    errorMessage = (state as? AuthState.Error)?.message,
+                    onSignIn = { email, password -> authViewModel.signIn(email, password) }
+                )
+            }
+
+            is AuthState.Authenticated -> {
+                val navController = rememberNavController()
+                val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text("Family Kanban") },
+                            actions = {
+                                if (currentRoute == Routes.BOARD) {
+                                    ProfileMenuIcon(
+                                        profile = state.profile,
+                                        onOpenProfile = { navController.navigate(Routes.PROFILE) }
+                                    )
+                                }
+                            }
+                        )
+                    }
+                ) { innerPadding ->
+                    NavHost(
+                        navController = navController,
+                        startDestination = Routes.BOARD,
+                        modifier = Modifier.padding(innerPadding)
+                    ) {
+                        composable(Routes.BOARD) {
+                            // TODO: replace with real KanbanBoardScreen
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Kanban Board — coming soon")
+                            }
+                        }
+                        composable(Routes.PROFILE) {
+                            ProfileScreen(
+                                profile = state.profile,
+                                onBack = { navController.popBackStack() },
+                                onSignOut = { authViewModel.signOut() }
+                            )
+                        }
+                    }
                 }
             }
         }
