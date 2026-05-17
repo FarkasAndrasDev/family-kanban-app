@@ -14,14 +14,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.farkasandrasdev.familykanbanapp.BacklogState
 import com.farkasandrasdev.familykanbanapp.BacklogViewModel
-import com.farkasandrasdev.familykanbanapp.BoardState
-import com.farkasandrasdev.familykanbanapp.BoardViewModel
+import com.farkasandrasdev.familykanbanapp.SprintState
+import com.farkasandrasdev.familykanbanapp.SprintViewModel
+import com.farkasandrasdev.familykanbanapp.model.Sprint
 import com.farkasandrasdev.familykanbanapp.model.Task
 import com.farkasandrasdev.familykanbanapp.model.TaskPriority
 import com.farkasandrasdev.familykanbanapp.model.UserProfile
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,14 +31,16 @@ import kotlinx.datetime.toLocalDateTime
 fun BacklogScreen(
     currentUser: UserProfile,
     backlogViewModel: BacklogViewModel = viewModel { BacklogViewModel() },
-    boardViewModel: BoardViewModel = viewModel { BoardViewModel() }
+    sprintViewModel: SprintViewModel = viewModel { SprintViewModel() }
 ) {
-    val backlogState by backlogViewModel.state.collectAsState()
-    val boardState   by boardViewModel.state.collectAsState()
-    var showAddTask  by remember { mutableStateOf(false) }
-    var selectedTask by remember { mutableStateOf<Task?>(null) }
+    val backlogState  by backlogViewModel.state.collectAsState()
+    val sprintState   by sprintViewModel.state.collectAsState()
+    var showAddTask   by remember { mutableStateOf(false) }
+    var selectedTask  by remember { mutableStateOf<Task?>(null) }
 
-    val activeSprintId = (boardState as? BoardState.Success)?.sprint?.id
+    val availableSprints = (sprintState as? SprintState.Success)
+        ?.sprints?.filter { it.status == "planned" || it.status == "active" }
+        ?: emptyList()
 
     Box(Modifier.fillMaxSize()) {
         when (val s = backlogState) {
@@ -75,9 +79,11 @@ fun BacklogScreen(
                     ) {
                         items(s.tasks, key = { it.id }) { task ->
                             BacklogTaskRow(
-                                task     = task,
-                                assignee = task.assignedTo?.let { s.profiles[it] },
-                                onClick  = { selectedTask = task }
+                                task        = task,
+                                assignee    = task.assignedTo?.let { s.profiles[it] },
+                                currentUser = currentUser,
+                                onAssign    = { userId -> backlogViewModel.assignTask(task.id, userId) },
+                                onClick     = { selectedTask = task }
                             )
                         }
                     }
@@ -114,15 +120,17 @@ fun BacklogScreen(
     val profiles = (backlogState as? BacklogState.Success)?.profiles ?: emptyMap()
     selectedTask?.let { task ->
         BacklogTaskDetailSheet(
-            task           = task,
-            profiles       = profiles,
-            activeSprintId = activeSprintId,
-            onDismiss      = { selectedTask = null },
-            onSave         = { title, description, priority, dueDate ->
+            task             = task,
+            profiles         = profiles,
+            currentUser      = currentUser,
+            availableSprints = availableSprints,
+            onDismiss        = { selectedTask = null },
+            onSave           = { title, description, priority, dueDate ->
                 backlogViewModel.updateTask(task.id, title, description, priority, dueDate)
                 selectedTask = null
             },
-            onMoveToSprint = { sprintId ->
+            onAssign         = { userId -> backlogViewModel.assignTask(task.id, userId) },
+            onMoveToSprint   = { sprintId ->
                 backlogViewModel.moveToSprint(task.id, sprintId)
                 selectedTask = null
             },
@@ -141,13 +149,27 @@ fun BacklogScreen(
 private fun BacklogTaskRow(
     task: Task,
     assignee: UserProfile?,
+    currentUser: UserProfile,
+    onAssign: (userId: String?) -> Unit,
     onClick: () -> Unit
 ) {
+    val today    = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+        .toLocalDateTime(TimeZone.currentSystemDefault()).date
+    val tomorrow = today.plus(1, kotlinx.datetime.DateTimeUnit.DAY)
+    val isDueSoon = task.dueDate != null &&
+        (task.dueDate <= today.toString() || task.dueDate == tomorrow.toString())
+
+    val cardColors = if (isDueSoon)
+        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f))
+    else
+        CardDefaults.cardColors()
+
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = cardColors
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -190,6 +212,24 @@ private fun BacklogTaskRow(
                 }
             }
         }
+        // Assignment row
+        Row(
+            modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (task.assignedTo != currentUser.id) {
+                TextButton(
+                    onClick = { onAssign(currentUser.id) },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                ) { Text("Assign to me", style = MaterialTheme.typography.labelSmall) }
+            }
+            if (task.assignedTo != null) {
+                TextButton(
+                    onClick = { onAssign(null) },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                ) { Text("Clear assignment", style = MaterialTheme.typography.labelSmall) }
+            }
+        }
     }
 }
 
@@ -200,9 +240,11 @@ private fun BacklogTaskRow(
 private fun BacklogTaskDetailSheet(
     task: Task,
     profiles: Map<String, UserProfile>,
-    activeSprintId: String?,
+    currentUser: UserProfile,
+    availableSprints: List<Sprint>,
     onDismiss: () -> Unit,
     onSave: (title: String, description: String?, priority: String, dueDate: String?) -> Unit,
+    onAssign: (userId: String?) -> Unit,
     onMoveToSprint: (sprintId: String) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -292,6 +334,23 @@ private fun BacklogTaskDetailSheet(
                 }
             }
 
+            // Assignment buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                if (task.assignedTo != currentUser.id) {
+                    OutlinedButton(onClick = { onAssign(currentUser.id) }) { Text("Assign to me") }
+                }
+                profiles.values
+                    .filter { it.id != currentUser.id && it.id != task.assignedTo }
+                    .forEach { other ->
+                        OutlinedButton(onClick = { onAssign(other.id) }) {
+                            Text("Assign to ${other.displayName}")
+                        }
+                    }
+                if (task.assignedTo != null) {
+                    OutlinedButton(onClick = { onAssign(null) }) { Text("Clear assignment") }
+                }
+            }
+
             // Last modified — only show if actually edited after creation
             val wasModified = task.updatedAt != null &&
                 task.createdAt != null &&
@@ -369,19 +428,22 @@ private fun BacklogTaskDetailSheet(
 
             HorizontalDivider()
 
-            if (activeSprintId != null) {
-                OutlinedButton(
-                    onClick  = { onMoveToSprint(activeSprintId) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Move to active sprint")
-                }
-            } else {
+            if (availableSprints.isEmpty()) {
                 Text(
-                    "No active sprint to move to.",
+                    "No planned or active sprints to move to.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            } else {
+                Text("Move to sprint", style = MaterialTheme.typography.labelMedium)
+                availableSprints.forEach { sprint ->
+                    OutlinedButton(
+                        onClick  = { onMoveToSprint(sprint.id) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("${sprint.name}  (${sprint.status})")
+                    }
+                }
             }
 
             TextButton(

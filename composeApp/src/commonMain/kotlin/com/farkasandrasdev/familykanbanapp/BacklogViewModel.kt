@@ -89,6 +89,22 @@ class BacklogViewModel : ViewModel() {
         }
     }
 
+    fun assignTask(taskId: String, userId: String?) {
+        viewModelScope.launch {
+            try {
+                supabase.from("tasks").update(
+                    buildJsonObject { put("assigned_to", userId) }
+                ) { filter { eq("id", taskId) } }
+                val current = _state.value as? BacklogState.Success ?: return@launch
+                _state.value = current.copy(tasks = current.tasks.map { t ->
+                    if (t.id == taskId) t.copy(assignedTo = userId) else t
+                })
+            } catch (e: Exception) {
+                _state.value = BacklogState.Error(e.message ?: "Failed to assign task")
+            }
+        }
+    }
+
     fun moveToSprint(taskId: String, sprintId: String) {
         viewModelScope.launch {
             try {

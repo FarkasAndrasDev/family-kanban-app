@@ -18,17 +18,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.farkasandrasdev.familykanbanapp.BoardState
 import com.farkasandrasdev.familykanbanapp.BoardViewModel
 import com.farkasandrasdev.familykanbanapp.model.Task
-import com.farkasandrasdev.familykanbanapp.model.TaskPriority
-import com.farkasandrasdev.familykanbanapp.model.TaskStatus
 import com.farkasandrasdev.familykanbanapp.model.UserProfile
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.plus
+import kotlinx.datetime.toLocalDateTime
 
-private data class ColumnDef(val status: TaskStatus, val label: String)
-
-private val COLUMNS = listOf(
-    ColumnDef(TaskStatus.TODO,        "To Do"),
-    ColumnDef(TaskStatus.IN_PROGRESS, "In Progress"),
-    ColumnDef(TaskStatus.DONE,        "Done"),
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,7 +86,7 @@ fun KanbanBoardScreen(
                         contentPadding = PaddingValues(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(COLUMNS) { col ->
+                        items(BOARD_COLUMNS) { col ->
                             val colTasks = s.tasks
                                 .filter { it.status == col.status.value }
                                 .sortedBy { it.position }
@@ -100,6 +95,8 @@ fun KanbanBoardScreen(
                                 label = col.label,
                                 tasks = colTasks,
                                 profiles = s.profiles,
+                                currentUser = currentUser,
+                                onAssign = { taskId, userId -> boardViewModel.assignTask(taskId, userId) },
                                 onAddTask = { showAddTask = true },
                                 onTaskClick = { selectedTask = it }
                             )
@@ -142,11 +139,18 @@ fun KanbanBoardScreen(
     // ── Task detail sheet ─────────────────────────────────────────
     selectedTask?.let { task ->
         TaskDetailSheet(
-            task     = task,
-            profiles = (state as? BoardState.Success)?.profiles ?: emptyMap(),
-            onDismiss = { selectedTask = null },
-            onMove    = { newStatus -> boardViewModel.moveTask(task.id, newStatus); selectedTask = null },
-            onDelete  = { boardViewModel.deleteTask(task.id); selectedTask = null }
+            task            = task,
+            profiles        = (state as? BoardState.Success)?.profiles ?: emptyMap(),
+            currentUser     = currentUser,
+            onDismiss       = { selectedTask = null },
+            onSave          = { title, description, priority, dueDate ->
+                boardViewModel.updateTask(task.id, title, description, priority, dueDate)
+                selectedTask = null
+            },
+            onAssign        = { userId -> boardViewModel.assignTask(task.id, userId) },
+            onMove          = { newStatus -> boardViewModel.moveTask(task.id, newStatus); selectedTask = null },
+            onMoveToBacklog = { boardViewModel.moveToBacklog(task.id); selectedTask = null },
+            onDelete        = { boardViewModel.deleteTask(task.id); selectedTask = null }
         )
     }
 }
@@ -158,6 +162,8 @@ private fun KanbanColumnView(
     label: String,
     tasks: List<Task>,
     profiles: Map<String, UserProfile>,
+    currentUser: UserProfile,
+    onAssign: (taskId: String, userId: String?) -> Unit,
     onAddTask: () -> Unit,
     onTaskClick: (Task) -> Unit
 ) {
@@ -186,7 +192,13 @@ private fun KanbanColumnView(
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
             items(tasks, key = { it.id }) { task ->
-                TaskCard(task = task, profiles = profiles, onClick = { onTaskClick(task) })
+                TaskCard(
+                    task        = task,
+                    profiles    = profiles,
+                    currentUser = currentUser,
+                    onAssign    = { userId -> onAssign(task.id, userId) },
+                    onClick     = { onTaskClick(task) }
+                )
             }
         }
 
@@ -203,13 +215,28 @@ private fun KanbanColumnView(
 private fun TaskCard(
     task: Task,
     profiles: Map<String, UserProfile>,
+    currentUser: UserProfile,
+    onAssign: (userId: String?) -> Unit,
     onClick: () -> Unit
 ) {
+    val today    = Instant.fromEpochMilliseconds(System.currentTimeMillis())
+        .toLocalDateTime(TimeZone.currentSystemDefault()).date
+    val tomorrow = today.plus(1, kotlinx.datetime.DateTimeUnit.DAY)
+    val isDueSoon = task.dueDate != null &&
+        task.status != "done" &&
+        (task.dueDate <= today.toString() || task.dueDate == tomorrow.toString())
+
+    val cardColors = if (isDueSoon)
+        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f))
+    else
+        CardDefaults.cardColors()
+
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = cardColors
     ) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -244,69 +271,28 @@ private fun TaskCard(
                     }
                 }
             }
+
+            // Assignment row
+            val isAssignedToMe = task.assignedTo == currentUser.id
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!isAssignedToMe) {
+                    TextButton(
+                        onClick = { onAssign(currentUser.id) },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                    ) { Text("Assign to me", style = MaterialTheme.typography.labelSmall) }
+                }
+                if (task.assignedTo != null) {
+                    TextButton(
+                        onClick = { onAssign(null) },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                    ) { Text("Clear assignment", style = MaterialTheme.typography.labelSmall) }
+                }
+            }
         }
     }
 }
 
 
 
-// ── Add task sheet ────────────────────────────────────────────────
-// (defined in AddTaskSheet.kt)
-
-// ── Task detail sheet ─────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TaskDetailSheet(
-    task: Task,
-    profiles: Map<String, UserProfile>,
-    onDismiss: () -> Unit,
-    onMove: (newStatus: String) -> Unit,
-    onDelete: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-
-            if (!task.description.isNullOrBlank()) {
-                Text(task.description, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PriorityChip(task.priority)
-                if (task.dueDate != null) {
-                    Text("Due: ${task.dueDate}", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            val assignee = task.assignedTo?.let { profiles[it] }
-            if (assignee != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssigneeBubble(assignee)
-                    Text(assignee.displayName, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            HorizontalDivider()
-
-            Text("Move to", style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                COLUMNS.filter { it.status.value != task.status }.forEach { col ->
-                    OutlinedButton(onClick = { onMove(col.status.value) }) { Text(col.label) }
-                }
-            }
-
-            HorizontalDivider()
-
-            TextButton(
-                onClick  = onDelete,
-                colors   = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Delete task") }
-        }
-    }
-}
+// ── Add task sheet / Task detail sheet ───────────────────────────
+// (defined in AddTaskSheet.kt and TaskDetailSheet.kt)

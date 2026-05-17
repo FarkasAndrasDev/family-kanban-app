@@ -50,13 +50,16 @@ class BoardViewModel : ViewModel() {
                     .decodeList<Task>()
                     .sortedBy { it.position }
 
-                // 3. Profiles for assignees that appear on the tasks
-                val assigneeIds = tasks.mapNotNull { it.assignedTo }.distinct()
-                val profiles: Map<String, UserProfile> = if (assigneeIds.isEmpty()) {
+                // 3. Profiles for assignees, creators and modifiers
+                val profileIds = (tasks.mapNotNull { it.assignedTo }
+                        + tasks.map { it.createdBy }
+                        + tasks.mapNotNull { it.updatedBy })
+                    .distinct()
+                val profiles: Map<String, UserProfile> = if (profileIds.isEmpty()) {
                     emptyMap()
                 } else {
                     supabase.from("profiles")
-                        .select { filter { isIn("id", assigneeIds) } }
+                        .select { filter { isIn("id", profileIds) } }
                         .decodeList<ProfileRow>()
                         .associate { it.id to UserProfile(it.id, it.displayName, it.avatarUrl) }
                 }
@@ -100,6 +103,39 @@ class BoardViewModel : ViewModel() {
         }
     }
 
+    fun updateTask(
+        taskId: String,
+        title: String,
+        description: String?,
+        priority: String,
+        dueDate: String?
+    ) {
+        viewModelScope.launch {
+            try {
+                supabase.from("tasks").update(buildJsonObject {
+                    put("title", title)
+                    if (!description.isNullOrBlank()) put("description", description)
+                    else put("description", null as String?)
+                    put("priority", priority)
+                    if (!dueDate.isNullOrBlank()) put("due_date", dueDate)
+                    else put("due_date", null as String?)
+                }) { filter { eq("id", taskId) } }
+
+                val current = _state.value as? BoardState.Success ?: return@launch
+                _state.value = current.copy(tasks = current.tasks.map { t ->
+                    if (t.id == taskId) t.copy(
+                        title       = title,
+                        description = description?.ifBlank { null },
+                        priority    = priority,
+                        dueDate     = dueDate?.ifBlank { null }
+                    ) else t
+                })
+            } catch (e: Exception) {
+                _state.value = BoardState.Error(e.message ?: "Failed to update task")
+            }
+        }
+    }
+
     fun moveTask(taskId: String, newStatus: String) {
         viewModelScope.launch {
             try {
@@ -133,6 +169,36 @@ class BoardViewModel : ViewModel() {
                 _state.value = current.copy(tasks = current.tasks.filter { it.id != taskId })
             } catch (e: Exception) {
                 _state.value = BoardState.Error(e.message ?: "Failed to delete task")
+            }
+        }
+    }
+
+    fun assignTask(taskId: String, userId: String?) {
+        viewModelScope.launch {
+            try {
+                supabase.from("tasks").update(
+                    buildJsonObject { put("assigned_to", userId) }
+                ) { filter { eq("id", taskId) } }
+                val current = _state.value as? BoardState.Success ?: return@launch
+                _state.value = current.copy(tasks = current.tasks.map { t ->
+                    if (t.id == taskId) t.copy(assignedTo = userId) else t
+                })
+            } catch (e: Exception) {
+                _state.value = BoardState.Error(e.message ?: "Failed to assign task")
+            }
+        }
+    }
+
+    fun moveToBacklog(taskId: String) {
+        viewModelScope.launch {
+            try {
+                supabase.from("tasks").update(
+                    buildJsonObject { put("sprint_id", null as String?) }
+                ) { filter { eq("id", taskId) } }
+                val current = _state.value as? BoardState.Success ?: return@launch
+                _state.value = current.copy(tasks = current.tasks.filter { it.id != taskId })
+            } catch (e: Exception) {
+                _state.value = BoardState.Error(e.message ?: "Failed to move task to backlog")
             }
         }
     }

@@ -19,14 +19,16 @@ import com.farkasandrasdev.familykanbanapp.ui.KanbanBoardScreen
 import com.farkasandrasdev.familykanbanapp.ui.LoginScreen
 import com.farkasandrasdev.familykanbanapp.ui.ProfileMenuIcon
 import com.farkasandrasdev.familykanbanapp.ui.ProfileScreen
+import com.farkasandrasdev.familykanbanapp.ui.SprintsScreen
 
 private object Routes {
     const val BOARD   = "board"
     const val BACKLOG = "backlog"
+    const val SPRINTS = "sprints"
     const val PROFILE = "profile"
 }
 
-private val bottomNavRoutes = listOf(Routes.BOARD, Routes.BACKLOG)
+private val bottomNavRoutes = listOf(Routes.BOARD, Routes.BACKLOG, Routes.SPRINTS)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +62,7 @@ fun App(authViewModel: AuthViewModel = viewModel { AuthViewModel() }) {
                                 Text(
                                     when (currentRoute) {
                                         Routes.BACKLOG -> "Backlog"
+                                        Routes.SPRINTS -> "Sprints"
                                         Routes.PROFILE -> "Profile"
                                         else           -> "Family Kanban"
                                     }
@@ -98,6 +101,16 @@ fun App(authViewModel: AuthViewModel = viewModel { AuthViewModel() }) {
                                     icon  = { Text("📝") },
                                     label = { Text("Backlog") }
                                 )
+                                NavigationBarItem(
+                                    selected = currentRoute == Routes.SPRINTS,
+                                    onClick  = {
+                                        navController.navigate(Routes.SPRINTS) {
+                                            popUpTo(Routes.BOARD)
+                                        }
+                                    },
+                                    icon  = { Text("🏃") },
+                                    label = { Text("Sprints") }
+                                )
                             }
                         }
                     }
@@ -112,6 +125,9 @@ fun App(authViewModel: AuthViewModel = viewModel { AuthViewModel() }) {
                         }
                         composable(Routes.BACKLOG) {
                             BacklogScreen(currentUser = state.profile)
+                        }
+                        composable(Routes.SPRINTS) {
+                            SprintsScreen(currentUser = state.profile)
                         }
                         composable(Routes.PROFILE) {
                             ProfileScreen(
